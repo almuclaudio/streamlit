@@ -5,3 +5,4 @@ fpdf>=1.7.2
 Pillow>=10.2.0
 numpy>=1.26.0
 openpyxl
+kaleido>=0.2.1
