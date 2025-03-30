@@ -1,165 +1,265 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.io as pio
-from io import BytesIO
-from fpdf import FPDF
-from PIL import Image
-import tempfile
 import numpy as np
+import plotly.express as px
+import datetime
+import io
+import unicodedata
 
-st.set_page_config(page_title="Marketing Insights Dashboard", layout="wide")
-st.title("\U0001F4C8 Marketing Insights Dashboard")
-st.write("Sube archivos Excel de campañas (Google Ads, Meta Ads, Mailchimp) para visualizar métricas clave.")
+# Función para normalizar cadenas (quitar acentos y pasar a minúsculas)
+def normalize(text):
+    if not isinstance(text, str):
+        return ""
+    nfkd_form = unicodedata.normalize('NFKD', text)
+    return u"".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower()
 
-uploaded_files = st.file_uploader("Archivos Excel", type=["xlsx"], accept_multiple_files=True)
-
-if uploaded_files:
-    all_data = []
-    for uploaded_file in uploaded_files:
-        xls = pd.ExcelFile(uploaded_file)
-        for sheet in xls.sheet_names:
-            df = pd.read_excel(xls, sheet_name=sheet)
-            df["Fuente"] = sheet
-            all_data.append(df)
-
-    df = pd.concat(all_data, ignore_index=True)
-
-    # Cálculos y formatos
-    df["CTR (%)"] = round(df["Clics"] / df["Impresiones"] * 100, 2)
-    df["Coste por conversión (€)"] = round(df["Coste (€)"] / df["Conversiones"], 2)
-    df["Fecha"] = pd.to_datetime(df["Fecha"])
-
-    # Filtros interactivos
-    st.sidebar.header("✨ Filtros")
-    canales = df["Fuente"].unique().tolist()
-    regiones = df["Región"].unique().tolist()
-    campañas = df["Campaña"].unique().tolist()
-    fecha_min, fecha_max = df["Fecha"].min(), df["Fecha"].max()
-
-    canales_sel = st.sidebar.multiselect("Canales", canales, default=canales)
-    regiones_sel = st.sidebar.multiselect("Regiones", regiones, default=regiones)
-    campañas_sel = st.sidebar.multiselect("Campañas", campañas, default=campañas)
-    rango_fechas = st.sidebar.date_input("Rango de fechas", [fecha_min, fecha_max])
-
-    # Colores personalizados por fuente
-    st.sidebar.header("🎨 Colores por fuente")
-    colores_fuente = {}
-    for canal in canales:
-        colores_fuente[canal] = st.sidebar.color_picker(f"Color para {canal}", key=canal)
-
-    df = df[
-        (df["Fuente"].isin(canales_sel)) &
-        (df["Región"].isin(regiones_sel)) &
-        (df["Campaña"].isin(campañas_sel)) &
-        (df["Fecha"] >= pd.to_datetime(rango_fechas[0])) &
-        (df["Fecha"] <= pd.to_datetime(rango_fechas[1]))
-    ]
-
-    df["Semana"] = df["Fecha"].dt.isocalendar().week
-    df["Mes"] = df["Fecha"].dt.strftime("%Y-%m")
-
-    imagenes_para_pdf = {}
-
-    def mostrar_y_descargar(fig, nombre_archivo, ancho=True):
-        st.plotly_chart(fig, use_container_width=ancho)
-        buffer = BytesIO()
-        pio.write_image(fig, buffer, format="png")
-        imagenes_para_pdf[nombre_archivo] = buffer.getvalue()
-        st.download_button("📅 Descargar PNG", data=buffer.getvalue(), file_name=f"{nombre_archivo}.png", mime="image/png")
-
-    st.subheader("📆 Evolución semanal de conversiones")
-    semana_conv = df.groupby(["Semana", "Fuente"])["Conversiones"].sum().reset_index()
-    fig2 = px.line(semana_conv, x="Semana", y="Conversiones", color="Fuente", markers=True, color_discrete_map=colores_fuente)
-    mostrar_y_descargar(fig2, "conversiones_semanales")
-
-    st.subheader("📆 Evolución mensual de coste")
-    mes_coste = df.groupby(["Mes", "Fuente"])["Coste (€)"].sum().reset_index()
-    fig3 = px.bar(mes_coste, x="Mes", y="Coste (€)", color="Fuente", barmode="group", color_discrete_map=colores_fuente)
-    mostrar_y_descargar(fig3, "coste_mensual")
-
-    st.subheader("📊 Rendimiento por canal")
-    total_conv = df.groupby("Fuente")[["Conversiones"]].sum().reset_index()
-    fig4 = px.bar(total_conv, x="Fuente", y="Conversiones", color="Fuente", color_discrete_map=colores_fuente)
-    mostrar_y_descargar(fig4, "conversiones_por_canal")
-
-    st.subheader("💰 Coste por conversión")
-    avg_cost = df.groupby("Fuente")[["Coste por conversión (€)"]].mean().reset_index()
-    fig5 = px.bar(avg_cost, x="Fuente", y="Coste por conversión (€)", color="Fuente", color_discrete_map=colores_fuente)
-    mostrar_y_descargar(fig5, "coste_por_conversion")
-
-    st.subheader("📑 Conversiones por campaña")
-    camp_conv = df.groupby("Campaña")["Conversiones"].sum().reset_index()
-    fig6 = px.bar(camp_conv, x="Campaña", y="Conversiones", color="Campaña")
-    mostrar_y_descargar(fig6, "conversiones_por_campana")
-
-    st.subheader("🌍 Conversiones por región y canal")
-    region_canal = df.groupby(["Región", "Fuente"])["Conversiones"].sum().reset_index()
-    fig7 = px.bar(region_canal, x="Región", y="Conversiones", color="Fuente", barmode="group", color_discrete_map=colores_fuente)
-    mostrar_y_descargar(fig7, "conversiones_por_region")
-
-    st.subheader("🗺️ Mapa de conversiones por región (aproximación)")
-    regiones_coords = {
-        "Norte": {"lat": 43.3, "lon": -3.8},
-        "Sur": {"lat": 37.4, "lon": -5.9},
-        "Este": {"lat": 39.5, "lon": -0.4},
-        "Oeste": {"lat": 40.0, "lon": -6.0},
-        "Centro": {"lat": 40.4, "lon": -3.7}
+# Función para detectar columnas requeridas y opcionales en cada DataFrame
+def detectar_columnas(df):
+    # Diccionario con las palabras clave y el nombre de columna detectado
+    columnas_detectadas = {
+        "fecha": None,
+        "region": None,
+        "clics": None,
+        "impresiones": None,
+        "conversiones": None,
+        "coste": None,
+        "canal": None,       # opcional
+        "campana": None,     # opcional (se busca "campaña" sin tilde)
+        "leads": None        # opcional
     }
-    df_mapa = df.groupby("Región")["Conversiones"].sum().reset_index()
-    df_mapa["lat"] = df_mapa["Región"].map(lambda x: regiones_coords[x]["lat"])
-    df_mapa["lon"] = df_mapa["Región"].map(lambda x: regiones_coords[x]["lon"])
+    for col in df.columns:
+        col_norm = normalize(col)
+        for key in columnas_detectadas.keys():
+            if key in col_norm:
+                columnas_detectadas[key] = col
+    return columnas_detectadas
 
-    fig_mapa = px.scatter_mapbox(
-        df_mapa,
-        lat="lat",
-        lon="lon",
-        size="Conversiones",
-        hover_name="Región",
-        zoom=5,
-        height=500,
-        mapbox_style="carto-positron"
-    )
-    st.plotly_chart(fig_mapa, use_container_width=True)
+# Función para cargar archivos Excel (uno o varios) y combinar hojas en un único DataFrame
+def cargar_datos(files):
+    lista_df = []
+    for file in files:
+        # Se leen todas las hojas del Excel
+        try:
+            xls = pd.ExcelFile(file, engine='openpyxl')
+        except Exception as e:
+            st.error(f"Error al leer el archivo: {e}")
+            continue
+        for sheet in xls.sheet_names:
+            try:
+                df = pd.read_excel(xls, sheet_name=sheet)
+                cols = detectar_columnas(df)
+                # Verificamos que las columnas esenciales estén presentes
+                if None in [cols["fecha"], cols["region"], cols["clics"], cols["impresiones"], cols["conversiones"], cols["coste"]]:
+                    st.warning(f"En la hoja '{sheet}' del archivo '{file.name}' no se han detectado todas las columnas esenciales. Se omite.")
+                    continue
+                # Renombramos las columnas para homogeneizar el DataFrame
+                df = df.rename(columns={
+                    cols["fecha"]: "fecha",
+                    cols["region"]: "region",
+                    cols["clics"]: "clics",
+                    cols["impresiones"]: "impresiones",
+                    cols["conversiones"]: "conversiones",
+                    cols["coste"]: "coste"
+                })
+                # Si existen columnas opcionales, se renombran
+                if cols["canal"]:
+                    df = df.rename(columns={cols["canal"]: "canal"})
+                if cols["campana"]:
+                    df = df.rename(columns={cols["campana"]: "campana"})
+                if cols["leads"]:
+                    df = df.rename(columns={cols["leads"]: "leads"})
+                # Convertir la columna fecha a datetime
+                df["fecha"] = pd.to_datetime(df["fecha"], errors='coerce')
+                df = df.dropna(subset=["fecha"])
+                # Cálculo de métricas
+                df["CTR"] = np.where(df["impresiones"] > 0, (df["clics"] / df["impresiones"]) * 100, 0)
+                df["Coste_por_conversion"] = np.where(df["conversiones"] > 0, df["coste"] / df["conversiones"], np.nan)
+                # Agregar columnas para identificar el origen (archivo y hoja)
+                df["origen_archivo"] = file.name
+                df["origen_hoja"] = sheet
+                lista_df.append(df)
+            except Exception as e:
+                st.error(f"Error procesando la hoja '{sheet}' del archivo '{file.name}': {e}")
+    if lista_df:
+        datos = pd.concat(lista_df, ignore_index=True)
+        return datos
+    else:
+        return pd.DataFrame()
 
-    st.subheader("📉 Distribución de CTR por canal")
-    fig8 = px.box(df, x="Fuente", y="CTR (%)", points="all", color="Fuente", color_discrete_map=colores_fuente)
-    mostrar_y_descargar(fig8, "distribucion_ctr")
+# Función para agrupar por frecuencia (día, semana, mes)
+def agrupar_por_frecuencia(df, columna_fecha, frecuencia):
+    if frecuencia == "Diario":
+        freq = 'D'
+    elif frecuencia == "Semanal":
+        freq = 'W'
+    elif frecuencia == "Mensual":
+        freq = 'M'
+    else:
+        freq = 'D'
+    df_group = df.set_index(columna_fecha).groupby(pd.Grouper(freq=freq)).sum().reset_index()
+    return df_group
 
-    st.markdown("---")
-    st.subheader("📄 Vista previa de los datos filtrados")
+# Título y estilo general
+st.set_page_config(page_title="Dashboard Marketing", layout="wide")
+st.title("Dashboard de Resultados de Campañas")
 
-    # Selección de columna para ordenamiento
-    columnas_orden = df.columns.tolist()
-    col_orden = st.selectbox("Ordenar por columna:", columnas_orden, index=columnas_orden.index("Fecha"))
-    ascendente = st.radio("Dirección de orden:", ["Ascendente", "Descendente"]) == "Ascendente"
+# Subida de archivos Excel
+st.sidebar.header("Carga de Archivos")
+uploaded_files = st.sidebar.file_uploader("Sube uno o varios archivos Excel", type=["xlsx"], accept_multiple_files=True)
 
-    datos_ordenados = df.sort_values(by=col_orden, ascending=ascendente)
-    st.dataframe(datos_ordenados, use_container_width=True, height=500)
-
-    # Exportar Excel de datos ordenados
-    excel_buffer = BytesIO()
-    datos_ordenados.to_excel(excel_buffer, index=False)
-    st.download_button("📤 Descargar vista actual (Excel)", data=excel_buffer.getvalue(), file_name="vista_filtrada.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    # Exportar PDF con todos los gráficos
-    if st.button("📄 Descargar todos los gráficos en PDF"):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
-            pdf = FPDF()
-            for nombre, imagen_bytes in imagenes_para_pdf.items():
-                with tempfile.NamedTemporaryFile(suffix=".png") as img_tmp:
-                    img_tmp.write(imagen_bytes)
-                    img_tmp.flush()
-                    img = Image.open(img_tmp.name)
-                    img_path = img_tmp.name
-                    pdf.add_page()
-                    pdf.image(img_path, x=10, y=20, w=180)
-                    pdf.set_font("Arial", size=12)
-                    pdf.ln(10)
-                    pdf.cell(200, 10, nombre.replace("_", " ").title(), ln=True)
-            pdf.output(tmpfile.name)
-            tmpfile.seek(0)
-            st.download_button("📄 Descargar PDF de gráficos", data=tmpfile.read(), file_name="report_graficos_marketing.pdf", mime="application/pdf")
-
+datos = pd.DataFrame()
+if uploaded_files:
+    datos = cargar_datos(uploaded_files)
+    if datos.empty:
+        st.warning("No se han cargado datos válidos.")
+    else:
+        st.success("Datos cargados correctamente.")
 else:
-    st.info("Sube al menos un archivo Excel para comenzar.")
+    st.info("Sube archivos Excel para comenzar.")
+
+if not datos.empty:
+    # Filtros interactivos
+    st.sidebar.header("Filtros")
+    fecha_min = datos["fecha"].min().date()
+    fecha_max = datos["fecha"].max().date()
+    rango_fechas = st.sidebar.date_input("Rango de fechas", [fecha_min, fecha_max], min_value=fecha_min, max_value=fecha_max)
+    if isinstance(rango_fechas, tuple) or isinstance(rango_fechas, list):
+        inicio, fin = rango_fechas
+    else:
+        inicio = fin = rango_fechas
+
+    # Filtro por Canal si existe
+    if "canal" in datos.columns:
+        canales = datos["canal"].dropna().unique().tolist()
+        seleccion_canales = st.sidebar.multiselect("Canal", canales, default=canales)
+    else:
+        seleccion_canales = None
+
+    # Filtro por Región
+    regiones = datos["region"].dropna().unique().tolist()
+    seleccion_regiones = st.sidebar.multiselect("Región", regiones, default=regiones)
+
+    # Filtro por Campaña si existe
+    if "campana" in datos.columns:
+        campanas = datos["campana"].dropna().unique().tolist()
+        seleccion_campanas = st.sidebar.multiselect("Campaña", campanas, default=campanas)
+    else:
+        seleccion_campanas = None
+
+    # Aplicar filtros
+    filtro = (datos["fecha"].dt.date >= inicio) & (datos["fecha"].dt.date <= fin) & (datos["region"].isin(seleccion_regiones))
+    if seleccion_canales is not None:
+        filtro &= datos["canal"].isin(seleccion_canales)
+    if seleccion_campanas is not None:
+        filtro &= datos["campana"].isin(seleccion_campanas)
+    datos_filtrados = datos[filtro]
+
+    if datos_filtrados.empty:
+        st.warning("No hay datos para el rango y filtros seleccionados.")
+    else:
+        # Crear pestañas para organizar gráficos
+        tabs = st.tabs([
+            "Evolución Conversiones",
+            "Evolución Coste",
+            "Coste por Conversión",
+            "CTR por Canal",
+            "Conversión por Campaña",
+            "Comparativa Regiones",
+            "Rendimiento por Canal",
+            "Leads por Región"
+        ])
+
+        # 1. Evolución de Conversiones
+        with tabs[0]:
+            st.subheader("Evolución de Conversiones")
+            freq_sel = st.selectbox("Selecciona la frecuencia", ["Diario", "Semanal", "Mensual"], key="conv_freq")
+            df_conv = agrupar_por_frecuencia(datos_filtrados, "fecha", freq_sel)
+            if not df_conv.empty and "conversiones" in df_conv.columns:
+                fig = px.line(df_conv, x="fecha", y="conversiones", title="Evolución de Conversiones")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No hay datos disponibles para este gráfico.")
+
+        # 2. Evolución de Coste
+        with tabs[1]:
+            st.subheader("Evolución de Coste")
+            freq_sel = st.selectbox("Selecciona la frecuencia", ["Diario", "Semanal", "Mensual"], key="cost_freq")
+            df_cost = agrupar_por_frecuencia(datos_filtrados, "fecha", freq_sel)
+            if not df_cost.empty and "coste" in df_cost.columns:
+                fig = px.line(df_cost, x="fecha", y="coste", title="Evolución de Coste")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No hay datos disponibles para este gráfico.")
+
+        # 3. Coste por Conversión total y su evolución
+        with tabs[2]:
+            st.subheader("Coste por Conversión")
+            total_coste = datos_filtrados["coste"].sum()
+            total_conversiones = datos_filtrados["conversiones"].sum()
+            coste_conversion_total = total_coste / total_conversiones if total_conversiones > 0 else np.nan
+            st.metric("Coste por Conversión Total", f"{coste_conversion_total:.2f}" if not np.isnan(coste_conversion_total) else "N/D")
+            # Evolución temporal de coste por conversión
+            df_temp = datos_filtrados.copy()
+            df_temp = df_temp.sort_values("fecha")
+            df_temp["Coste_por_conversion"] = np.where(df_temp["conversiones"] > 0, df_temp["coste"] / df_temp["conversiones"], np.nan)
+            if not df_temp.empty:
+                fig = px.line(df_temp, x="fecha", y="Coste_por_conversion", title="Evolución de Coste por Conversión")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No hay datos disponibles para este gráfico.")
+
+        # 4. Distribución de CTR por Canal
+        with tabs[3]:
+            st.subheader("Distribución de CTR por Canal")
+            if "canal" in datos_filtrados.columns:
+                df_ctr = datos_filtrados.groupby("canal")["CTR"].mean().reset_index()
+                fig = px.bar(df_ctr, x="canal", y="CTR", title="CTR Promedio por Canal")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No se detectó la columna 'canal' en los datos.")
+
+        # 5. Conversión por Campaña
+        with tabs[4]:
+            st.subheader("Conversión por Campaña")
+            if "campana" in datos_filtrados.columns:
+                df_camp = datos_filtrados.groupby("campana")["conversiones"].sum().reset_index()
+                fig = px.bar(df_camp, x="campana", y="conversiones", title="Conversiones por Campaña")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No se detectó la columna 'campana' en los datos.")
+
+        # 6. Comparativa entre Regiones por Canal
+        with tabs[5]:
+            st.subheader("Comparativa entre Regiones por Canal")
+            if "canal" in datos_filtrados.columns:
+                df_comp = datos_filtrados.groupby(["region", "canal"])["conversiones"].sum().reset_index()
+                fig = px.bar(df_comp, x="region", y="conversiones", color="canal", barmode="group", title="Conversiones por Región y Canal")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No se detectó la columna 'canal' para este gráfico.")
+
+        # 7. Rendimiento por Canal
+        with tabs[6]:
+            st.subheader("Rendimiento por Canal")
+            if "canal" in datos_filtrados.columns:
+                df_rend = datos_filtrados.groupby("canal").agg({
+                    "clics": "sum",
+                    "impresiones": "sum",
+                    "conversiones": "sum",
+                    "coste": "sum"
+                }).reset_index()
+                df_rend["CTR"] = np.where(df_rend["impresiones"] > 0, (df_rend["clics"] / df_rend["impresiones"]) * 100, 0)
+                fig = px.bar(df_rend, x="canal", y="CTR", title="CTR por Canal")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No se detectó la columna 'canal' en los datos.")
+
+        # 8. Leads por Región
+        with tabs[7]:
+            st.subheader("Leads por Región")
+            if "leads" in datos_filtrados.columns:
+                df_leads = datos_filtrados.groupby("region")["leads"].sum().reset_index()
+                fig = px.pie(df_leads, names="region", values="leads", title="Distribución de Leads por Región")
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No se detectó la columna 'leads' en los datos.")
